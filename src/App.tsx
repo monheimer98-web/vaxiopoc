@@ -2,14 +2,6 @@
 import { useState, ChangeEvent, FormEvent } from "react";
 import type { CSSProperties } from "react";
 
-// --------------------------------------------------
-// API-Basis-URL
-// --------------------------------------------------
-// Lokal: fällt zurück auf http://localhost:4000
-// Live (z.B. Vercel): wir setzen später VITE_API_BASE_URL in den Env-Variablen.
-const API_BASE_URL =
-  import.meta.env.VITE_API_BASE_URL || "http://localhost:4000";
-
 // -----------------------------
 // Typen
 // -----------------------------
@@ -93,7 +85,7 @@ interface VaccinationPlanItem {
 
 interface VaccinationPlanCore {
   createdAt: string;
-  countriesMatched?: { requestedName: string; matchedKey: string | null }[];
+  countriesMatched?: { requestedName: string; matchedKey: string }[];
   items: VaccinationPlanItem[];
   grouped?: {
     entryRequired?: VaccinationPlanItem[];
@@ -103,7 +95,7 @@ interface VaccinationPlanCore {
   riskProfile?: Record<string, boolean>;
 }
 
-interface ApiError {
+interface VaccinationPlanError {
   message: string;
   code?: string;
   details?: unknown;
@@ -114,8 +106,8 @@ interface VaccinationPlanResponse {
   data?: {
     plan?: VaccinationPlanCore;
   };
-  plan?: VaccinationPlanCore; // falls du es direkt als "plan" zurückgibst
-  error?: ApiError;
+  plan?: VaccinationPlanCore; // falls direkt als "plan" zurückgegeben
+  error?: VaccinationPlanError;
 }
 
 // -----------------------------
@@ -667,7 +659,7 @@ function deriveRiskProfile(answers: QuestionnaireAnswers): RiskProfile {
     2: closeContactPopulation,
     3: healthCareContact,
     4: disasterDeployment,
-    5: false, // reserviert
+    5: false, // aktuell kein eigener STIKO-Tag genutzt – reserviert
     6: probableAnimalContact,
     7: possibleTickExposure,
     8: highRiskComorbidity,
@@ -759,9 +751,84 @@ function App() {
     setVaccinationPlan(null);
     setStep(4); // direkt zur Bestätigungsseite springen
 
+    // 1) Erkennen, ob wir lokal entwickeln
+    const isLocalDev =
+      window.location.hostname === "localhost" ||
+      window.location.hostname === "127.0.0.1";
+
+    // 2) FALL A: Nicht lokal (z.B. GitHub Pages) → Demo-Impfplan anzeigen
+    if (!isLocalDev) {
+      const countries = questionnaire.travel.countries.length
+        ? questionnaire.travel.countries
+        : ["Indonesien"];
+
+      const demoItems: VaccinationPlanItem[] = [
+        {
+          vaccine: "Hepatitis A",
+          countries,
+          reasons: ["coreMissingOrUnclear", "coreForAllTravellers"],
+          riskTags: [],
+          status:
+            questionnaire.vaccinations["Hepatitis A"]?.status ?? "unknown",
+          lastDose:
+            questionnaire.vaccinations["Hepatitis A"]?.lastDose ?? null,
+          needsAction: true
+        },
+        {
+          vaccine: "Typhus",
+          countries,
+          reasons: ["riskBasedMissingOrUnclear", "riskBased"],
+          riskTags: [1],
+          status: questionnaire.vaccinations["Typhus"]?.status ?? "unknown",
+          lastDose: questionnaire.vaccinations["Typhus"]?.lastDose ?? null,
+          needsAction: true
+        },
+        {
+          vaccine: "Tollwut",
+          countries,
+          reasons: ["riskBasedMissingOrUnclear", "riskBased"],
+          riskTags: [6],
+          status: questionnaire.vaccinations["Tollwut"]?.status ?? "unknown",
+          lastDose: questionnaire.vaccinations["Tollwut"]?.lastDose ?? null,
+          needsAction: true
+        }
+      ];
+
+      const entryRequired: VaccinationPlanItem[] = [];
+      const coreMissing = demoItems.filter((i) =>
+        i.reasons.includes("coreMissingOrUnclear")
+      );
+      const riskMissing = demoItems.filter((i) =>
+        i.reasons.includes("riskBasedMissingOrUnclear")
+      );
+
+      const demoPlan: VaccinationPlanCore = {
+        createdAt: new Date().toISOString(),
+        countriesMatched: countries.map((c) => ({
+          requestedName: c,
+          matchedKey: c
+        })),
+        items: demoItems,
+        grouped: {
+          entryRequired,
+          coreMissingOrUnclear: coreMissing,
+          riskBasedMissingOrUnclear: riskMissing
+        },
+        // riskProfile in vereinfachter Form, damit der Debug-Block nicht crasht
+        riskProfile: Object.fromEntries(
+          (Object.entries(rp) as [string, boolean][]).map(([k, v]) => [k, v])
+        )
+      };
+
+      setVaccinationPlan(demoPlan);
+      setSubmitStatus("success");
+      return;
+    }
+
+    // 3) FALL B: Lokale Entwicklung → echten Impfplan-Server ansprechen
     try {
       const response = await fetch(
-        `${API_BASE_URL}/api/v1/vaccination-plan`,
+        "http://localhost:4000/api/v1/vaccination-plan",
         {
           method: "POST",
           headers: {
@@ -788,11 +855,13 @@ function App() {
       if (json.success === false) {
         setSubmitStatus("error");
         setServerError(
-          json.error?.message || "Der Impfplan-Server hat einen Fehler gemeldet."
+          json.error?.message ||
+            "Der Impfplan-Server hat einen Fehler gemeldet."
         );
         return;
       }
 
+      // Versuche zuerst data.plan, sonst plan, sonst null
       const plan: VaccinationPlanCore | null =
         json.data?.plan ?? json.plan ?? null;
 
@@ -818,7 +887,7 @@ function App() {
     setStep(1);
   };
 
-  // interne Arzt-Zusammenfassung
+  // Kleiner Helfer für die interne Arzt-Zusammenfassung
   const renderInternalPlanSummary = () => {
     if (!vaccinationPlan) return null;
 
@@ -967,7 +1036,7 @@ function App() {
   return (
     <div style={appStyle}>
       <div style={{ width: "100%", maxWidth: 960 }}>
-        {/* Brand-Zeile oben */}
+        {/* Brand-Zeile oben, wirkt „Clinic / Private Praxis“ */}
         <div style={headerBarStyle}>
           <div style={logoStyle}>
             <div style={logoCircleStyle}>V</div>
@@ -1687,7 +1756,7 @@ function App() {
               </section>
             )}
 
-            {/* Schritt 4: Bestätigung */}
+            {/* Schritt 4: Bestätigung für Patient*innen + interne Ansicht */}
             {step === 4 && (
               <section style={sectionCardStyle}>
                 <div style={sectionTitleRow}>
@@ -1717,9 +1786,7 @@ function App() {
                       falls sinnvoll – Vorschlägen zur Malariaprophylaxe.
                     </p>
 
-                    {vaccinationPlan &&
-                      SHOW_DEBUG_INTERNAL_CARD &&
-                      renderInternalPlanSummary()}
+                    {vaccinationPlan && SHOW_DEBUG_INTERNAL_CARD && renderInternalPlanSummary()}
                   </>
                 )}
 
