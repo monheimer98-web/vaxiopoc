@@ -375,8 +375,9 @@ export function buildVaccinationPlan(input: BuildPlanInput): VaccinationPlan {
 
     // 3b) Für alle Reisenden empfohlen
     for (const v of cfg.recommendedForAll || []) {
-      // Altersentsprechende Standardimpfungen aktuell nicht als einzelne Vakzine geführt
-      if (v.toLowerCase().startsWith("altersentsprech")) continue;
+      // WICHTIG: Wir filtern die "altersentsprechende Grundimmunisierung"
+      // NICHT mehr heraus, damit sie im Impfplan sichtbar wird.
+      // (früher: if (v.toLowerCase().startsWith("altersentsprech")) continue;)
 
       const item = ensureAcc(v);
       item.countries.add(countryKey);
